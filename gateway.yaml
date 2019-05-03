@@ -1,31 +1,65 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
-Description: luthor gateway
+Description: Luthor Gateway
 
 Parameters:
   StageName:
     Type: String
     Default: dev
-    AllowedValues: [dev]
+    AllowedValues:
+    - dev
+    Description: The Lambda Function and API Gateway Stage
 
 Resources:
-  LuthorGatewayLambdaFunction:
-    Type: AWS::Lambda::Function
+  LuthorLambdaFunction:
+    Type: 'AWS::Serverless::Function'
     Properties:
-      Handler: index.handler
-      Role: !GetAtt [LambdaExecutionRole, Arn]
-      Code:
-        ZipFile: |
-          exports.handler = (event, context, callback) => { callback(null, "Hello World!"); };
+      AutoPublishAlias: current
+      FunctionName: !Sub luthor-gateway-${StageName}
       Runtime: nodejs8.10
-      Timeout: 25
+      Handler: index.handler
+      InlineCode: |
+        "use strict";
+
+        const AWS = require("aws-sdk");
+        const lambda = new AWS.Lambda();
+
+        exports.handler = async (event, context) => {
+          const req = JSON.parse(event.body)
+
+          const params = {
+            FunctionName: process.env.TRIGGER_LAMBDA,
+            InvocationType: "RequestResponse",
+            Payload: JSON.stringify(req)
+          };
+
+          console.log('invoking lex');
+          console.log(params);
+
+          const response = await lambda.invoke(params).promise();
+
+          console.log('received lex response');
+          console.log(response)
+
+          const payload = JSON.parse(response.Payload);
+          const statusCode = payload.intentName ? 200 : 422;
+          const message = payload.intentName ? payload.message : null;
+          const body = JSON.stringify({ message });
+
+          return { statusCode, body };
+        };
+
+      Timeout: 300
+      MemorySize: 1792
+      Policies:
+        - VPCAccessPolicy: {}
+        - Statement:
+          -
+            Effect: "Allow"
+            Action:
+              - "lambda:InvokeFunction"
+            Resource: "*"
       Events:
-        GetRequest:
-          Type: Api
-          Properties:
-            Path: /hooks/salesforce/sms
-            Method: GET
-            RestApiId: !Ref LuthorGateway
         PostRequest:
           Type: Api
           Properties:
@@ -38,16 +72,10 @@ Resources:
             Path: /hooks/salesforce/sms
             Method: OPTIONS
             RestApiId: !Ref LuthorGateway
-  LambdaExecutionRole:
-    Type: AWS::IAM::Role
-    Properties:
-      AssumeRolePolicyDocument:
-        Version: 2012-10-17
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: lambda.amazonaws.com
-            Action: sts:AssumeRole
+      Environment:
+        Variables:
+          TRIGGER_LAMBDA: arn:aws:lambda:us-west-2:477873552632:function:TriggerLuthor
+
   LuthorGateway:
     Type: AWS::Serverless::Api
     Properties:
@@ -57,35 +85,33 @@ Resources:
         swagger: "2.0"
         info:
           version: "1.0"
-          title: !Sub luthor-api-gateway-${AWS::Region}-${StageName}
-        basePath: /
-        schemes: [https]
+          title: !Sub luthor-api-${AWS::Region}-${StageName}
+        basePath: "/"
+        schemes:
+        - "https"
         paths:
           /hooks/salesforce/sms:
             post:
               responses: {}
               x-amazon-apigateway-integration:
-                uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LuthorGatewayLambdaFunction.Arn}:current/invocations
+                uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LuthorLambdaFunction.Arn}:current/invocations
                 passthroughBehavior: "when_no_match"
                 httpMethod: "POST"
-                type: "aws_proxy"
-            get:
-              responses: {}
-              x-amazon-apigateway-integration:
-                uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LuthorGatewayLambdaFunction.Arn}:current/invocations
-                passthroughBehavior: "when_no_match"
-                httpMethod: "GET"
                 type: "aws_proxy"
             options:
               responses: {}
               x-amazon-apigateway-integration:
-                uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LuthorGatewayLambdaFunction.Arn}:current/invocations
+                uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LuthorLambdaFunction.Arn}:current/invocations
                 passthroughBehavior: "when_no_match"
                 httpMethod: "OPTIONS"
                 type: "aws_proxy"
+      MethodSettings:
+        - HttpMethod: POST
+          DataTraceEnabled: true
+          ResourcePath: /~hooks/salesforce/sms
 
 Outputs:
-  LuthorAPIURL:
-    Value: !Sub "https://${LuthorGateway}.execute-api.${AWS::Region}.amazonaws.com"
+  LuthorGatewayAPIURL:
+    Value: !Sub "https://${LuthorGateway}.execute-api.${AWS::Region}.amazonaws.com/Prod/hooks/salesforce/sms"
     Export:
-      Name: !Sub ${StageName}LuthorAPIURL
+      Name: !Sub ${StageName}LuthorGatewayAPIURL
