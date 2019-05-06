@@ -23,9 +23,22 @@ Resources:
 
         const AWS = require("aws-sdk");
         const lambda = new AWS.Lambda();
+        const pinpoint = new AWS.Pinpoint({region: 'us-west-2'});
 
         exports.handler = async (event, context) => {
-          const req = JSON.parse(event.body)
+          console.log('received event');
+          console.log(event);
+          let req;
+
+          if (event.Records) {
+            const smsHistoryMessage = JSON.parse(event.Records[0].Sns.Message).messageBody;
+            req = { smsHistoryMessage }
+          } else {
+            req = JSON.parse(event.body);
+          }
+
+          console.log('req')
+          console.log(req)
 
           const params = {
             FunctionName: process.env.TRIGGER_LAMBDA,
@@ -46,8 +59,32 @@ Resources:
           const message = payload.intentName ? payload.message : null;
           const body = JSON.stringify({ message });
 
+          await deliverPinpoint(message);
+
           return { statusCode, body };
         };
+
+        async function deliverPinpoint(message) {
+          const params = {
+            ApplicationId: '30ac8ca8a3c4472293dafb0295d3f1e2',
+            MessageRequest: {
+              Addresses: {
+                '+14109268581': {
+                  ChannelType: 'SMS'
+                }
+              },
+              MessageConfiguration: {
+                SMSMessage: {
+                  Body: message,
+                  MessageType: 'TRANSACTIONAL',
+                  OriginationNumber: '+16185459459'
+                }
+              }
+            }
+          };
+
+          return pinpoint.sendMessages(params).promise();
+        }
 
       Timeout: 300
       MemorySize: 1792
